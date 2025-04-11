@@ -19,6 +19,7 @@ class ScaleRuler(QWidget):
         self.setFixedHeight(self.height_)
         self.ruler_start = 10
         self.ruler_end = 150  # 初始比例尺长度（像素）
+        self.max_display_length = 800  # 增加最大显示长度，允许更长的比例尺
         self.dragging = False
         self.dragging_start = False  # 标记是否正在拖动左侧端点
         self.ruler_value = 1.0  # 真实长度（用户定义）
@@ -27,39 +28,49 @@ class ScaleRuler(QWidget):
         # 允许整个比例尺控件在窗口中自由移动
         self.ruler_dragging = False
         self.drag_start_pos = None
-        # 允许比例尺在父窗口中自由移动
-        self.setGeometry(10, 10, 200, self.height_)
+        # 设置初始位置在图片区域中间位置
+        self.setGeometry(300, 50, 500, self.height_)  # 更宽的初始宽度
+        self.setMinimumWidth(200)  # 设置最小宽度
+        self.setMaximumWidth(2000)  # 设置最大宽度，允许更长的比例尺
 
     def paintEvent(self, event):
+        # 使用双缓冲绘制减少闪烁
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(QColor(0, 206, 209), 2)  # 改为蓝色，更易于观察
+        painter.setRenderHint(QPainter.Antialiasing, True)  # 启用抗锯齿
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)  # 平滑像素图变换
+
+        # 设置画笔
+        pen = QPen(QColor(0, 206, 209), 2)  # 蓝色，更易于观察
         painter.setPen(pen)
 
         # 绘制比例尺主线
         y = self.height_ // 2
         painter.drawLine(self.ruler_start, y, self.ruler_end, y)
 
-        # 绘制刻度
-        tick_spacing = 50
+        # 绘制刻度，限制最多显示10个分度值
         ruler_length = self.ruler_end - self.ruler_start
 
-        # 确保至少有两个刻度点
-        if ruler_length > tick_spacing:
-            num_ticks = max(2, int(ruler_length / tick_spacing) + 1)
+        # 确保至少有两个刻度点，最多10个
+        if ruler_length > 20:  # 确保有足够的空间显示刻度
+            # 限制最多显示10个刻度
+            max_ticks = 10
+            num_ticks = min(max_ticks, max(2, int(ruler_length / 30) + 1))
             tick_positions = [self.ruler_start + i * (ruler_length / (num_ticks - 1)) for i in range(num_ticks)]
 
+            # 设置字体一次，避免重复设置
+            painter.setFont(QFont('Arial', 8))
+
             for i, x in enumerate(tick_positions):
-                painter.drawLine(int(x), y - 5, int(x), y + 5)
+                x_pos = int(x)  # 转换为整数，避免浮点数绘制问题
+                painter.drawLine(x_pos, y - 5, x_pos, y + 5)
                 # 计算每个刻度对应的实际值
                 value = (i / (num_ticks - 1)) * self.ruler_value
-                painter.setFont(QFont('Arial', 8))
-                painter.drawText(QPoint(int(x) - 10, y - 8), f"{value:.1f}")
+                painter.drawText(QPoint(x_pos - 10, y - 8), f"{value:.1f}")
         else:
             # 如果比例尺太短，至少显示起点和终点
+            painter.setFont(QFont('Arial', 8))
             painter.drawLine(self.ruler_start, y - 5, self.ruler_start, y + 5)
             painter.drawLine(self.ruler_end, y - 5, self.ruler_end, y + 5)
-            painter.setFont(QFont('Arial', 8))
             painter.drawText(QPoint(self.ruler_start - 10, y - 8), "0.0")
             painter.drawText(QPoint(self.ruler_end - 10, y - 8), f"{self.ruler_value:.1f}")
 
@@ -93,7 +104,18 @@ class ScaleRuler(QWidget):
     def mouseMoveEvent(self, event):
         if self.dragging:
             # 拖动右侧端点
-            self.ruler_end = max(self.ruler_start + 10, event.x())
+            # 允许数值随鼠标移动而变化，不限制显示长度
+            raw_end = max(self.ruler_start + 10, event.x())
+
+            # 直接更新结束位置，不限制最大长度
+            self.ruler_end = raw_end
+
+            # 如果比例尺长度超过控件宽度，自动调整控件宽度
+            ruler_length = self.ruler_end - self.ruler_start
+            if ruler_length + 40 > self.width():  # 增加边距，确保有足够空间
+                new_width = ruler_length + 40  # 左右各预留20像素
+                self.resize(new_width, self.height_)  # 直接调整控件大小
+
             self.update()
         elif self.dragging_start:
             # 拖动左侧端点，只允许向右移动，不能向左移动超过初始位置
@@ -107,6 +129,8 @@ class ScaleRuler(QWidget):
             delta = event.pos() - self.drag_start_pos
             self.move(self.pos() + delta)
             self.drag_start_pos = event.pos()
+            # 防止闪烁，使用update()而不是repaint()
+            self.update()
 
     def mouseReleaseEvent(self, event):
         self.dragging = False
@@ -336,13 +360,8 @@ class ImageProcessor(QMainWindow):
 
         # Right panel for image display
         image_panel = QVBoxLayout()
-        self.ruler = ScaleRuler()
-        # 设置比例尺不受布局限制，可以自由移动
-        self.ruler.setParent(self)
-        self.ruler.show()
-        # 不再将比例尺添加到布局中
-        # image_panel.addWidget(self.ruler)
 
+        # 创建图像查看器
         self.image_viewer = ImageViewer()
         self.image_viewer.mouseMoved.connect(self.handleMouseMove)
         self.image_viewer.mouseClicked.connect(self.handleMouseClick)
@@ -351,9 +370,16 @@ class ImageProcessor(QMainWindow):
         image_widget = QWidget()
         image_widget.setLayout(image_panel)
 
-        # Add panels to main layout
+        # 添加面板到主布局
         main_layout.addWidget(control_panel, stretch=1)
         main_layout.addWidget(image_widget, stretch=4)
+
+        # 在布局完成后创建比例尺，确保它在图像区域上方
+        self.ruler = ScaleRuler(self)
+        # 设置比例尺不受布局限制，可以自由移动
+        self.ruler.show()
+
+        # 已在上面创建和添加
 
     def loadImage(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Image", "", "Image Files (*.png *.jpg *.jpeg *.bmp)")
@@ -564,6 +590,48 @@ class ImageProcessor(QMainWindow):
                 if hull is not None:
                     cv2.drawContours(save_img, [hull], -1, (0, 0, 255), 2)
 
+            # 在图片底部添加比例尺
+            height, width = save_img.shape[:2]
+
+            # 获取当前比例尺的值
+            ruler_value = self.ruler.ruler_value
+
+            # 设置比例尺参数
+            scale_height = 50  # 比例尺高度
+            scale_width = 100  # 比例尺宽度
+            margin = 20  # 边距
+
+            # 创建一个新的画布，底部增加比例尺的空间
+            new_img = np.zeros((height + scale_height, width, 3), dtype=np.uint8)
+            new_img[:height, :] = save_img  # 复制原图到新画布上部
+            new_img[height:, :] = 255  # 底部区域设为白色
+
+            # 绘制比例尺（靠右侧显示）
+            margin_right = 50  # 右侧边距
+            start_x = width - scale_width - margin_right
+            end_x = start_x + scale_width
+            y_pos = height + scale_height // 2
+
+            # 绘制比例尺主线（增加线条粗细）
+            cv2.line(new_img, (start_x, y_pos), (end_x, y_pos), (0, 206, 209), 3)
+
+            # 绘制刻度（增加线条粗细和长度）
+            cv2.line(new_img, (start_x, y_pos - 7), (start_x, y_pos + 7), (0, 206, 209), 3)
+            cv2.line(new_img, (end_x, y_pos - 7), (end_x, y_pos + 7), (0, 206, 209), 3)
+
+            # 添加文字标注（增加字体大小和粗细）
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.5  # 增大字体大小
+            font_color = (0, 0, 0)
+            thickness = 2  # 增加字体粗细
+
+            # 起点标注
+            cv2.putText(new_img, "0.0", (start_x - 15, y_pos - 12), font, font_scale, font_color, thickness)
+
+            # 终点标注（显示实际值）
+            value_text = f"{ruler_value:.1f} nm"
+            cv2.putText(new_img, value_text, (end_x - 50, y_pos - 12), font, font_scale, font_color, thickness)
+
             # 生成默认文件名带时间戳
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             default_name = f"highlight_{timestamp}.png"
@@ -574,7 +642,7 @@ class ImageProcessor(QMainWindow):
             )
 
             if save_path:
-                cv2.imwrite(save_path, save_img)
+                cv2.imwrite(save_path, new_img)
 
 
 if __name__ == "__main__":
