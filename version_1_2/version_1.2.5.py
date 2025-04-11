@@ -17,86 +17,104 @@ class ScaleRuler(QWidget):
         super().__init__(parent)
         self.height_ = 40
         self.setFixedHeight(self.height_)
-
         self.ruler_start = 10
-        self.ruler_end = 150
+        self.ruler_end = 150  # 初始比例尺长度（像素）
+        self.dragging = False
+        self.dragging_start = False  # 标记是否正在拖动左侧端点
         self.ruler_value = 1.0  # 真实长度（用户定义）
-
-        self.dragging_start = False
-        self.dragging_end = False
-
-        self.scale_factor = 1.0  # 用于处理缩放，默认1.0
-
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
-
-    def setScaleFactor(self, factor: float):
-        """外部接口：当图像缩放时调用此方法同步比例尺缩放"""
-        if factor <= 0:
-            return
-        self.scale_factor = factor
-        self.update()
+        # 允许整个比例尺控件在窗口中自由移动
+        self.ruler_dragging = False
+        self.drag_start_pos = None
+        # 允许比例尺在父窗口中自由移动
+        self.setGeometry(10, 10, 200, self.height_)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(Qt.black, 2)
+        pen = QPen(QColor(0, 206, 209), 2)  # 改为蓝色，更易于观察
         painter.setPen(pen)
 
+        # 绘制比例尺主线
         y = self.height_ // 2
-        start = int(self.ruler_start * self.scale_factor)
-        end = int(self.ruler_end * self.scale_factor)
+        painter.drawLine(self.ruler_start, y, self.ruler_end, y)
 
-        # 主线
-        painter.drawLine(start, y, end, y)
-
-        # 刻度
+        # 绘制刻度
         tick_spacing = 50
-        tick_spacing_scaled = int(tick_spacing * self.scale_factor)
-        painter.setFont(QFont('Arial', 8))
+        ruler_length = self.ruler_end - self.ruler_start
 
-        x = start
-        while x <= end:
-            painter.drawLine(x, y - 5, x, y + 5)
-            value = ((x - start) / (end - start)) * self.ruler_value if end != start else 0
-            painter.drawText(QPoint(x + 2, y - 8), f"{value:.1f}")
-            x += tick_spacing_scaled
+        # 确保至少有两个刻度点
+        if ruler_length > tick_spacing:
+            num_ticks = max(2, int(ruler_length / tick_spacing) + 1)
+            tick_positions = [self.ruler_start + i * (ruler_length / (num_ticks - 1)) for i in range(num_ticks)]
 
-        # 总长文字
-        painter.drawText(QPoint(start, y + 20), f"{self.ruler_value:.1f} nm")
+            for i, x in enumerate(tick_positions):
+                painter.drawLine(int(x), y - 5, int(x), y + 5)
+                # 计算每个刻度对应的实际值
+                value = (i / (num_ticks - 1)) * self.ruler_value
+                painter.setFont(QFont('Arial', 8))
+                painter.drawText(QPoint(int(x) - 10, y - 8), f"{value:.1f}")
+        else:
+            # 如果比例尺太短，至少显示起点和终点
+            painter.drawLine(self.ruler_start, y - 5, self.ruler_start, y + 5)
+            painter.drawLine(self.ruler_end, y - 5, self.ruler_end, y + 5)
+            painter.setFont(QFont('Arial', 8))
+            painter.drawText(QPoint(self.ruler_start - 10, y - 8), "0.0")
+            painter.drawText(QPoint(self.ruler_end - 10, y - 8), f"{self.ruler_value:.1f}")
+
+        # 绘制总长值
+        painter.drawText(QPoint(self.ruler_start, y + 20), f"{self.ruler_value:.1f} nm")
 
     def mousePressEvent(self, event):
-        x = event.x()
-
-        real_start = int(self.ruler_start * self.scale_factor)
-        real_end = int(self.ruler_end * self.scale_factor)
-
-        if abs(x - real_end) < 10:
-            self.dragging_end = True
+        if abs(event.x() - self.ruler_end) < 10:
+            # 右侧端点拖动
+            self.dragging = True
             self.setCursor(Qt.ClosedHandCursor)
-        elif abs(x - real_start) < 10:
+        elif abs(event.x() - self.ruler_start) < 10:
+            # 左侧端点拖动
             self.dragging_start = True
             self.setCursor(Qt.ClosedHandCursor)
-        elif real_start <= x <= real_end:
-            val, ok = QInputDialog.getDouble(self, "设置比例尺值", "当前比例尺对应的真实值：", value=self.ruler_value, min=0.01)
-            if ok:
-                self.ruler_value = val
-                self.update()
+        elif self.ruler_start <= event.x() <= self.ruler_end:
+            # 如果点击在比例尺线上，但不是端点，则开始整个比例尺的拖动
+            if event.button() == Qt.RightButton:
+                # 右键点击弹出设置真实长度对话框
+                val, ok = QInputDialog.getDouble(self, "设置比例尺值", "当前比例尺对应的真实值：",
+                                                 value=self.ruler_value, min=0.01)
+                if ok:
+                    self.ruler_value = val
+                    self.update()
+            else:
+                # 左键点击开始拖动整个比例尺
+                self.ruler_dragging = True
+                self.drag_start_pos = event.pos()
+                self.setCursor(Qt.ClosedHandCursor)
 
     def mouseMoveEvent(self, event):
-        x = event.x()
-
-        if self.dragging_end:
-            self.ruler_end = max(self.ruler_start + 10, x / self.scale_factor)
+        if self.dragging:
+            # 拖动右侧端点
+            self.ruler_end = max(self.ruler_start + 10, event.x())
             self.update()
         elif self.dragging_start:
-            self.ruler_start = min(self.ruler_end - 10, x / self.scale_factor)
-            self.update()
+            # 拖动左侧端点，只允许向右移动，不能向左移动超过初始位置
+            new_start = event.x()
+            # 确保不能向左拖动超过初始位置，且与右端点保持最小距离
+            if 10 <= new_start < self.ruler_end - 10:  # 10是初始位置，不能向左拖动
+                self.ruler_start = new_start
+                self.update()
+        elif self.ruler_dragging:
+            # 拖动整个比例尺
+            delta = event.pos() - self.drag_start_pos
+            self.move(self.pos() + delta)
+            self.drag_start_pos = event.pos()
 
     def mouseReleaseEvent(self, event):
+        self.dragging = False
         self.dragging_start = False
-        self.dragging_end = False
+        self.ruler_dragging = False
+        self.drag_start_pos = None
         self.setCursor(Qt.OpenHandCursor)
+
 
 class ImageViewer(QWidget):
     mouseMoved = pyqtSignal(int, int)
@@ -171,14 +189,6 @@ class ImageViewer(QWidget):
             if 0 <= img_x < img_width and 0 <= img_y < img_height:
                 self.mouseClicked.emit(img_x, img_y)
 
-    def getCurrentScale(self):
-        if self.display_image is None:
-            return 1.0
-        img_height, img_width = self.display_image.shape[:2]
-        widget_width = self.width()
-        widget_height = self.height()
-        scale = min(widget_width / img_width, widget_height / img_height)
-        return scale
 
 class ImageProcessor(QMainWindow):
     def __init__(self):
@@ -233,23 +243,22 @@ class ImageProcessor(QMainWindow):
         threshold_layout = QVBoxLayout()
 
         # Threshold value slider
-        self.threshold_slider = QSlider(Qt.Horizontal) # 创建一个横向滑块
-        self.threshold_slider.setRange(0, 255) # 设置范围为 0~255
-        self.threshold_slider.setValue(self.threshold_value) # 初始值
-        self.threshold_slider.valueChanged.connect(self.updateThreshold) # 数值变化时执行方法
-        threshold_layout.addWidget(QLabel('数值下限：')) # 文字说明
-        threshold_layout.addWidget(self.threshold_slider) # 加入布局
-
+        self.threshold_slider = QSlider(Qt.Horizontal)  # 创建一个横向滑块
+        self.threshold_slider.setRange(0, 255)  # 设置范围为 0~255
+        self.threshold_slider.setValue(self.threshold_value)  # 初始值
+        self.threshold_slider.valueChanged.connect(self.updateThreshold)  # 数值变化时执行方法
+        threshold_layout.addWidget(QLabel('数值下限：'))  # 文字说明
+        threshold_layout.addWidget(self.threshold_slider)  # 加入布局
 
         # Threshold value spin box
-        self.threshold_spin = QSpinBox() # 创建一个整数输入框
+        self.threshold_spin = QSpinBox()  # 创建一个整数输入框
         self.threshold_spin.setRange(0, 255)
         self.threshold_spin.setValue(self.threshold_value)
         self.threshold_spin.valueChanged.connect(self.thresholdSliderFromSpin)
         threshold_layout.addWidget(self.threshold_spin)
 
         threshold_group.setLayout(threshold_layout)
-        threshold_group.setMaximumSize(300,150)
+        threshold_group.setMaximumSize(300, 150)
         control_layout.addWidget(threshold_group)
 
         # Morphology controls
@@ -272,7 +281,7 @@ class ImageProcessor(QMainWindow):
         morph_layout.addWidget(self.kernel_spin)
 
         morph_group.setLayout(morph_layout)
-        morph_group.setMaximumSize(300,150)
+        morph_group.setMaximumSize(300, 150)
         control_layout.addWidget(morph_group)
 
         # Distance controls
@@ -328,12 +337,13 @@ class ImageProcessor(QMainWindow):
         # Right panel for image display
         image_panel = QVBoxLayout()
         self.ruler = ScaleRuler()
-        image_panel.addWidget(self.ruler)
+        # 设置比例尺不受布局限制，可以自由移动
+        self.ruler.setParent(self)
+        self.ruler.show()
+        # 不再将比例尺添加到布局中
+        # image_panel.addWidget(self.ruler)
 
         self.image_viewer = ImageViewer()
-        self.ruler = ScaleRuler()
-        # 当图像设置或窗口 resize 时，更新比例尺的缩放
-        self.image_viewer.installEventFilter(self)  # 监听 resize 事件
         self.image_viewer.mouseMoved.connect(self.handleMouseMove)
         self.image_viewer.mouseClicked.connect(self.handleMouseClick)
 
@@ -505,13 +515,11 @@ class ImageProcessor(QMainWindow):
             self.threshold_spin.setValue(value)
             self.processImage()
 
-
     def thresholdSliderFromSpin(self, value):
         if self.flag:
             self.threshold_slider.setValue(value)
             self.threshold_value = value
             self.processImage()
-
 
     def updateMorphology(self, value):
         if self.flag:
@@ -519,13 +527,11 @@ class ImageProcessor(QMainWindow):
             self.kernel_spin.setValue(value)
             self.processImage()
 
-
     def kernelSliderFromSpin(self, value):
         if self.flag:
             self.kernel_slider.setValue(value)
             self.kernel_size = value
             self.processImage()
-
 
     def updateDistanceParams(self):
         if self.flag:
@@ -539,12 +545,10 @@ class ImageProcessor(QMainWindow):
             self.max_threshold_slider.setValue(value)
             self.max_threshold = value
 
-
     def minThresholdSliderFromSpin(self, value):
         if self.flag:
             self.min_threshold_slider.setValue(value)
             self.min_threshold = value
-
 
     def saveImage(self):
         if self.flag:
@@ -572,10 +576,6 @@ class ImageProcessor(QMainWindow):
             if save_path:
                 cv2.imwrite(save_path, save_img)
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        scale = self.image_viewer.getCurrentScale()
-        self.ruler.setScaleFactor(scale)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
