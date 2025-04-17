@@ -264,7 +264,7 @@ class ImageViewer(QWidget):
                 self.mouseMoved.emit(img_x, img_y)  # 发送鼠标移动信号，传递图像坐标
 
 
-def mousePressEvent(self, event):
+    def mousePressEvent(self, event):
         """
         鼠标按下事件处理
         当鼠标按钮在控件上按下时调用，将控件坐标转换为图像坐标并发送点击信号
